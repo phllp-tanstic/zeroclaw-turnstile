@@ -1,0 +1,18 @@
+# SOP: Payment Confirmation Poll
+# Runs every 60 seconds to check pending enrollment payments on-chain.
+
+[sop]
+name        = "payment-confirmation-poll"
+description = "Poll Solana RPC for confirmed enrollment payments"
+trigger     = { cron = "*/1 * * * *" }   # every minute
+
+[[sop.steps]]
+name   = "poll_pending_payments"
+skill  = "payment-confirm"
+prompt = """
+Check all pending enrollment payment reference keys in memory.
+For each one, call getSignaturesForAddress on the Solana RPC.
+Shape the response to under 200 tokens.
+If a payment is confirmed, update memory and post confirmation to the organizer channel.
+If the RPC errors, log it and continue — do not mark anything as confirmed or failed.
+"""

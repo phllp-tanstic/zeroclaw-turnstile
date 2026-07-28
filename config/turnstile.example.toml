@@ -1,0 +1,31 @@
+# Turnstile — Example Configuration
+# Copy this to config/turnstile.toml and fill in your values.
+# Never commit turnstile.toml — it contains secrets.
+# All secrets are stored via OS keyring when zeroclaw config set is used.
+
+[turnstile]
+# The host where the Actions responder is reachable from the internet.
+# For local testing use ngrok or similar. For production use your domain.
+responder_host = "https://your-domain.com"
+
+# Your Solana RPC endpoint. Use your own — never commit this value.
+# Recommended: Helius, QuickNode, or your own validator.
+rpc_url = "https://api.devnet.solana.com"   # swap for mainnet-beta when ready
+
+# The organizer's wallet address (recipient of enrollment payments).
+# This is a PUBLIC key — safe to commit once set to your real address.
+recipient_pubkey = "YOUR_WALLET_PUBKEY_HERE"
+
+# Discord channel ID where enrollment announcements are posted.
+# Right-click a channel in Discord (Developer Mode on) → Copy Channel ID.
+discord_announcement_channel = "YOUR_CHANNEL_ID_HERE"
+
+# Telegram chat ID for the organizer's private notification channel.
+telegram_organizer_chat = "YOUR_CHAT_ID_HERE"
+
+[turnstile.responder]
+# Port the Actions responder listens on locally.
+port = 8080
+
+# Path to the shared state file the responder reads and the agent writes.
+state_path = "responder/turnstile-state.json"
