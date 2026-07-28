@@ -1,0 +1,16 @@
+# Rust build artifacts
+responder/target/
+
+# Runtime state (contains live event/roster data)
+responder/turnstile-state.json
+
+# ZeroClaw secrets and local config overrides
+*.secret
+config/local.toml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/settings.json
