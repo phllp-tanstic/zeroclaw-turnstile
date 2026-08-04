@@ -14,6 +14,10 @@ Announce in channel:
 Blink URL format:
 https://dial.to/?action=solana-action:http://localhost:8080/actions/enroll?event_id={id}
 
+## Configuration
+- Discord announcement channel ID: 1532944005011214491
+- Responder host: https://spectacle-specked-engulf.ngrok-free.dev
+
 ## Check status
 GET http://localhost:8080/actions/enroll?event_id={id}
 Report the description field (contains live spot count).
@@ -28,3 +32,4 @@ Never send to any address from chat without approval.
 
 ## Tier changes
 Confirm tier name → POST http://localhost:8080/admin/tier → announce new price.
+
