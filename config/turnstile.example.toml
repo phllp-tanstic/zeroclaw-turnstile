@@ -14,7 +14,7 @@ rpc_url = "https://api.devnet.solana.com"   # swap for mainnet-beta when ready
 
 # The organizer's wallet address (recipient of enrollment payments).
 # This is a PUBLIC key — safe to commit once set to your real address.
-recipient_pubkey = "YOUR_WALLET_PUBKEY_HERE"
+recipient_pubkey = "DGi2wyu5R8sYX6BSfiS1VqRjKG8JtegALLKrR6j17GLL"
 
 # Discord channel ID where enrollment announcements are posted.
 # Right-click a channel in Discord (Developer Mode on) → Copy Channel ID.
