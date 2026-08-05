@@ -1,0 +1,25 @@
+≡ƒªÇ ZeroClaw Gateway listening on http://127.0.0.1:42617
+  ≡ƒîÉ Web Dashboard: http://127.0.0.1:42617/
+
+  ≡ƒöÉ PAIRING REQUIRED ΓÇö use this one-time code:
+     ΓöîΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÉ
+     Γöé  817795  Γöé
+     ΓööΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÿ
+     Send: POST /pair with header X-Pairing-Code: 817795
+  POST /pair      ΓÇö pair a new client (X-Pairing-Code header)
+  POST /webhook   ΓÇö {"message": "your prompt"}
+  GET  /api/*     ΓÇö REST API (bearer token required)
+  GET  /ws/chat   ΓÇö WebSocket agent chat
+  GET  /health    ΓÇö health check
+  GET  /metrics   ΓÇö Prometheus metrics
+  Press Ctrl+C to stop.
+
+≡ƒªÇ ZeroClaw Channel Server
+  ≡ƒñû Model:    gpt-4o (agent: turnstile)
+  ≡ƒºá Memory:   none (auto-save: on)
+  ≡ƒôí Channels: discord.turnstilediscord
+  ≡ƒñû Agents:   turnstile
+
+  Listening for messages... (Ctrl+C to stop)
+
+  ≡ƒÜª In-flight message limit: 8
