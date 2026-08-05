@@ -1,0 +1,12 @@
+{
+  "event_id": "evt_001",
+  "title": "Your Event Title",
+  "description": "A one-sentence description of your event.",
+  "icon_url": "https://your-domain.com/icon.png",
+  "capacity": 50,
+  "tiers": [
+    { "label": "Early Bird", "amount_usdc": 25.0, "active": true },
+    { "label": "Standard",   "amount_usdc": 45.0, "active": false },
+    { "label": "Late",       "amount_usdc": 60.0, "active": false }
+  ]
+}
