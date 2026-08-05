@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TURNSTILE — Event Enrollment</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://code.iconify.design/iconify-icon/1.0.7/iconify-icon.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+</head>
+<body class="bg-[#050505] text-neutral-200 font-sans overflow-hidden h-screen w-screen relative antialiased selection:bg-amber-500/30 selection:text-amber-200">
+
+    <!-- WebGL Background (identical shader, identical config) -->
+    <canvas id="gl" class="fixed inset-0 w-full h-full z-0 opacity-0"></canvas>
+
+    <!-- UI Overlay -->
+    <div class="relative z-10 w-full h-full pointer-events-none flex flex-col justify-between p-6 md:p-10">
+
+        <!-- Header -->
+        <header class="flex justify-between items-start w-full pointer-events-auto">
+            <div class="js-ui-top-left opacity-0 transform -translate-x-8">
+                <h1 class="font-mono text-xs tracking-[0.25em] uppercase text-neutral-300 mb-1 flex items-center gap-2">
+                    <iconify-icon icon="solar:turnstile-linear" stroke-width="1.5" class="text-amber-500 text-sm"></iconify-icon>
+                    TURNSTILE
+                </h1>
+                <p class="font-mono text-[10px] tracking-widest uppercase text-neutral-600">Event Enrollment</p>
+            </div>
+
+            <!-- Capacity badge -->
+            <div class="js-ui-top-right opacity-0 transform scale-90 origin-top-right">
+                <div class="js-magnetic rounded-full p-[1px] bg-gradient-to-br from-amber-500/40 via-neutral-600/20 to-transparent w-20 h-20 md:w-24 md:h-24 shadow-[0_0_30px_rgba(245,158,11,0.05)] cursor-pointer">
+                    <div class="bg-[#0a0a0a] rounded-full w-full h-full flex flex-col items-center justify-center font-mono text-[9px] md:text-[10px] tracking-widest text-neutral-400 text-center leading-relaxed">
+                        <span class="text-amber-500 mb-0.5"><iconify-icon icon="solar:users-group-rounded-linear" stroke-width="1.5" class="text-sm"></iconify-icon></span>
+                        SPOTS<br><span class="text-neutral-200 font-semibold" id="badge-spots">—</span>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Stage -->
+        <main class="w-full max-w-3xl absolute top-1/2 left-6 md:left-10 -translate-y-1/2 pointer-events-auto pr-6">
+
+            <!-- Event label -->
+            <div class="overflow-hidden inline-flex mb-2">
+                <p class="js-reveal-text font-mono text-xs md:text-sm tracking-[0.3em] text-amber-500 uppercase transform translate-y-full" id="event-label">Loading event...</p>
+            </div>
+
+            <!-- Spots remaining (hero number) -->
+            <div class="flex flex-col mt-2 mb-6">
+                <div class="overflow-hidden inline-flex">
+                    <p class="js-reveal-text font-mono text-6xl md:text-8xl lg:text-9xl tracking-tighter text-neutral-100 leading-none transform translate-y-full">
+                        <span id="spots-count">—</span><em class="not-italic text-amber-500 font-semibold text-4xl md:text-5xl lg:text-6xl ml-3" id="spots-label">spots</em>
+                    </p>
+                </div>
+            </div>
+
+            <!-- Description -->
+            <div class="overflow-hidden inline-flex max-w-md mb-8">
+                <p class="js-reveal-text text-sm md:text-base leading-relaxed text-neutral-400 font-normal transform translate-y-full" id="event-description">
+                    Secure your spot. Pay directly from your wallet — no accounts, no middlemen.
+                </p>
+            </div>
+
+            <!-- Enroll CTA -->
+            <div class="js-reveal-text transform translate-y-full">
+                <a id="enroll-btn" href="#" target="_blank"
+                   class="js-magnetic inline-flex items-center gap-3 px-8 py-4 rounded-full border border-amber-500/50 bg-gradient-to-r from-amber-500/20 to-transparent backdrop-blur-sm font-mono text-sm tracking-widest uppercase text-neutral-200 transition-all duration-500 hover:border-amber-500 hover:from-amber-500/30 hover:shadow-[0_0_40px_rgba(245,158,11,0.15)]">
+                    <iconify-icon icon="solar:wallet-linear" stroke-width="1.5" class="text-amber-500 text-base"></iconify-icon>
+                    <span id="enroll-label">Enroll now</span>
+                    <iconify-icon icon="solar:arrow-right-linear" stroke-width="1.5" class="text-amber-500/60 text-sm"></iconify-icon>
+                </a>
+                <p class="mt-3 font-mono text-[10px] tracking-widest uppercase text-neutral-600" id="enroll-sub">Tap to open in your Solana wallet</p>
+            </div>
+
+        </main>
+
+        <!-- Footer -->
+        <footer class="flex justify-between items-end w-full pointer-events-auto">
+
+            <!-- Price tier selector -->
+            <div class="js-ui-bottom-left flex gap-2 md:gap-3 opacity-0 transform translate-y-8" role="group" aria-label="Price Tier" id="tier-buttons">
+                <!-- Tiers injected by JS -->
+            </div>
+
+            <!-- Price display -->
+            <div class="js-ui-bottom-right text-right opacity-0 transform translate-x-8">
+                <p class="font-mono text-[9px] md:text-[10px] tracking-[0.2em] uppercase text-neutral-500 mb-1 flex justify-end items-center gap-1.5">
+                    <iconify-icon icon="solar:dollar-minimalistic-linear" stroke-width="1.5"></iconify-icon>
+                    Current price
+                </p>
+                <p class="font-mono text-xl md:text-2xl tracking-tight text-neutral-200" id="price-display">— USDC</p>
+            </div>
+        </footer>
+    </div>
+
+    <!-- Error state (hidden by default) -->
+    <div id="error-state" class="hidden fixed inset-0 z-20 flex items-center justify-center">
+        <div class="font-mono text-center">
+            <p class="text-amber-500 text-xs tracking-widest uppercase mb-2">No active event</p>
+            <p class="text-neutral-600 text-[10px] tracking-widest">Check back soon or contact the organizer.</p>
+        </div>
+    </div>
+
+    <script>
+    // ─── Config ───────────────────────────────────────────────────────────────
+    // Read from URL params so any organizer can use this page with their own
+    // responder and event ID — no code changes needed.
+    //
+    // Usage:
+    //   https://your-turnstile-page.vercel.app/?responder=https://your.ngrok.dev&event_id=evt_001
+    //
+    const params   = new URLSearchParams(window.location.search);
+    const RESPONDER = (params.get('responder') || '').replace(/\/$/, '');
+    const EVENT_ID  = params.get('event_id') || 'evt_001';
+
+    // ─── State ────────────────────────────────────────────────────────────────
+    let activeTierIndex = 0;
+    let tiers = [];
+    let eventData = null;
+    let pollInterval = null;
+
+    // ─── DOM refs ─────────────────────────────────────────────────────────────
+    const $spotsCount   = document.getElementById('spots-count');
+    const $spotsLabel   = document.getElementById('spots-label');
+    const $badgeSpots   = document.getElementById('badge-spots');
+    const $eventLabel   = document.getElementById('event-label');
+    const $eventDesc    = document.getElementById('event-description');
+    const $priceDisplay = document.getElementById('price-display');
+    const $enrollBtn    = document.getElementById('enroll-btn');
+    const $enrollLabel  = document.getElementById('enroll-label');
+    const $enrollSub    = document.getElementById('enroll-sub');
+    const $tierButtons  = document.getElementById('tier-buttons');
+    const $errorState   = document.getElementById('error-state');
+
+    // ─── Fetch live event data ─────────────────────────────────────────────────
+    async function fetchEvent() {
+        if (!RESPONDER) {
+            showError();
+            return;
+        }
+        try {
+            const res = await fetch(
+                `${RESPONDER}/actions/enroll?event_id=${EVENT_ID}`,
+                { headers: { 'ngrok-skip-browser-warning': '1' } }
+            );
+            if (!res.ok) { showError(); return; }
+            const data = await res.json();
+            applyEventData(data);
+        } catch (e) {
+            showError();
+        }
+    }
+
+    function applyEventData(data) {
+        // Parse spots from description field e.g. "...50 spot(s) remaining..."
+        const spotsMatch = data.description.match(/(\d+)\s+spot/i);
+        const spots = spotsMatch ? parseInt(spotsMatch[1]) : null;
+        const soldOut = data.label && data.label.toLowerCase().includes('waitlist');
+
+        // Title & description
+        $eventLabel.textContent = data.title || 'Event Enrollment';
+        $eventDesc.textContent  = (data.description || '').split('\n')[0];
+
+        // Spots
+        if (soldOut) {
+            $spotsCount.textContent = '0';
+            $spotsLabel.textContent = 'spots';
+            $badgeSpots.textContent = 'SOLD';
+        } else if (spots !== null) {
+            $spotsCount.textContent = spots;
+            $spotsLabel.textContent = spots === 1 ? 'spot' : 'spots';
+            $badgeSpots.textContent = spots;
+        }
+
+        // Price from label e.g. "Enroll — 25 USDC (50 spots left)"
+        const priceMatch = data.label && data.label.match(/([\d.]+)\s+USDC/i);
+        if (priceMatch) {
+            $priceDisplay.textContent = `${priceMatch[1]} USDC`;
+        }
+
+        // Enroll button
+        const actionHref = data.links?.actions?.[0]?.href;
+        if (actionHref) {
+            const fullAction = actionHref.startsWith('http')
+                ? actionHref
+                : `${RESPONDER}${actionHref}`;
+            const blinkUrl = `solana-action:${fullAction}`;
+            $enrollBtn.href = blinkUrl;
+        }
+
+        if (soldOut) {
+            $enrollLabel.textContent = 'Join waitlist';
+            $enrollSub.textContent   = 'Sold out — join the waitlist';
+        } else {
+            $enrollLabel.textContent = 'Enroll now';
+            $enrollSub.textContent   = 'Opens in your Solana wallet';
+        }
+
+        // Parse tiers from label if multiple actions exist
+        const actions = data.links?.actions || [];
+        if (actions.length > 1 && tiers.length === 0) {
+            tiers = actions.map((a, i) => {
+                const m = a.label.match(/([\d.]+)\s+USDC/i);
+                const nm = a.label.match(/^([^\d—]+)/);
+                return {
+                    label: nm ? nm[1].trim().replace(/—.*/, '').trim() : `Tier ${i+1}`,
+                    amount: m ? m[1] : '?',
+                    href: a.href,
+                };
+            });
+            renderTiers();
+        } else if (tiers.length === 0 && priceMatch) {
+            // Single tier — show one pill
+            tiers = [{ label: 'Early Bird', amount: priceMatch[1], href: actionHref }];
+            renderTiers();
+        }
+    }
+
+    function renderTiers() {
+        $tierButtons.innerHTML = '';
+        tiers.forEach((tier, i) => {
+            const active = i === activeTierIndex;
+            const btn = document.createElement('button');
+            btn.className = `js-tier-btn js-magnetic relative px-5 py-3 md:px-6 md:py-4 rounded-full border border-neutral-800 bg-neutral-950/50 backdrop-blur-sm font-mono text-[10px] md:text-xs tracking-widest uppercase transition-all duration-500 ease-out hover:border-neutral-600 focus:outline-none`;
+            btn.dataset.index = i;
+            btn.innerHTML = `
+                <div class="absolute inset-0 rounded-full bg-gradient-to-r from-amber-500/20 to-transparent transition-opacity duration-500 js-active-bg" style="opacity:${active ? 1 : 0}"></div>
+                <div class="absolute inset-0 rounded-full border border-amber-500/50 transition-opacity duration-500 js-active-border" style="opacity:${active ? 1 : 0}"></div>
+                <span class="relative z-10 flex flex-col items-start ${active ? 'text-neutral-200' : 'text-neutral-500'} js-active-text transition-colors duration-500">
+                    ${tier.label}
+                    <span class="text-[8px] md:text-[9px] tracking-widest mt-1 js-active-sub transition-colors duration-500 ${active ? 'text-amber-500/80' : 'text-neutral-600'}">${tier.amount} USDC</span>
+                </span>`;
+            btn.addEventListener('click', () => selectTier(i));
+            $tierButtons.appendChild(btn);
+            applyMagnetic(btn);
+        });
+    }
+
+    function selectTier(index) {
+        activeTierIndex = index;
+        const tier = tiers[index];
+
+        // Update price
+        gsap.to('#price-display', { opacity: 0, y: -8, duration: 0.2, ease: 'power2.in', onComplete: () => {
+            $priceDisplay.textContent = `${tier.amount} USDC`;
+            gsap.to('#price-display', { opacity: 1, y: 0, duration: 0.3, ease: 'power2.out' });
+        }});
+
+        // Update enroll href
+        if (tier.href) {
+            const fullAction = tier.href.startsWith('http') ? tier.href : `${RESPONDER}${tier.href}`;
+            $enrollBtn.href = `solana-action:${fullAction}`;
+        }
+
+        // Update pill states
+        $tierButtons.querySelectorAll('.js-tier-btn').forEach((btn, i) => {
+            const isActive = i === index;
+            btn.querySelector('.js-active-bg').style.opacity    = isActive ? '1' : '0';
+            btn.querySelector('.js-active-border').style.opacity = isActive ? '1' : '0';
+            const txt = btn.querySelector('.js-active-text');
+            const sub = btn.querySelector('.js-active-sub');
+            txt.classList.toggle('text-neutral-200', isActive);
+            txt.classList.toggle('text-neutral-500', !isActive);
+            sub.classList.toggle('text-amber-500/80', isActive);
+            sub.classList.toggle('text-neutral-600', !isActive);
+        });
+    }
+
+    function showError() {
+        $errorState.classList.remove('hidden');
+    }
+
+    // ─── Magnetic effect ──────────────────────────────────────────────────────
+    function applyMagnetic(el) {
+        el.addEventListener('mousemove', (e) => {
+            const rect = el.getBoundingClientRect();
+            const x = (e.clientX - rect.left - rect.width / 2) * 0.3;
+            const y = (e.clientY - rect.top - rect.height / 2) * 0.3;
+            gsap.to(el, { x, y, duration: 0.4, ease: 'power2.out', overwrite: true });
+        });
+        el.addEventListener('mouseleave', () => {
+            gsap.to(el, { x: 0, y: 0, duration: 0.7, ease: 'elastic.out(1,0.4)', overwrite: true });
+        });
+    }
+
+    // ─── WebGL background (identical to design source) ────────────────────────
+    const cv = document.getElementById('gl'), gl = cv.getContext('webgl');
+    let routeSm = 0;
+
+    if (gl) {
+        const F = `precision highp float;uniform vec2 u_res;uniform float u_time;uniform float u_route;
+        float h21(vec2 p){p=fract(p*vec2(123.34,456.21));p+=dot(p,p+45.32);return fract(p.x*p.y);}
+        void main(){
+            vec2 p=(gl_FragCoord.xy-.5*u_res)/u_res.y;
+            float t=u_time;
+            vec3 col=vec3(.03,.03,.035);
+            vec2 sp=floor(gl_FragCoord.xy/2.2);
+            float s=h21(sp);
+            float tw=.5+.5*sin(t*(1.+s*3.)+s*40.);
+            col+=vec3(.9,.85,.7)*step(.997,s)*tw*.6;
+            col+=vec3(.4,.4,.4)*step(.998,h21(sp+9.))*.4;
+            vec2 pc=vec2(0.,-1.62);
+            float pd=length(p-pc);
+            float planet=smoothstep(1.32,1.315,pd);
+            float rim=exp(-abs(pd-1.32)*14.);
+            vec3 atmo=mix(vec3(.6,.4,.15),vec3(.8,.6,.2),u_route*.4);
+            col=mix(col,vec3(.01,.01,.01),planet);
+            col+=vec3(.8,.6,.2)*planet*step(.994,h21(floor((p-pc)*60.)))*.6;
+            col+=atmo*rim*.6;
+            float R=mix(.52,.95,u_route*.5+.5*smoothstep(1.5,2.,u_route));
+            float orbd=abs(length(p-pc)-(1.32+R*.42));
+            float orbit=exp(-orbd*150.)*.3;
+            col+=vec3(.5,.48,.4)*orbit;
+            float ang=atan(p.y-pc.y,p.x-pc.x);
+            float sat=fract(ang/6.2832-t*.04);
+            float satG=exp(-orbd*100.)*exp(-pow(sat*16.,2.))*2.0;
+            float trail=exp(-orbd*100.)*smoothstep(.3,0.,sat)*.4;
+            col+=vec3(.9,.6,.1)*(satG+trail);
+            col*=1.-length(p*vec2(.6,.8))*.4;
+            float gr=h21(gl_FragCoord.xy+t)*.03;
+            gl_FragColor=vec4(col+gr,1.);
+        }`;
+        const V = 'attribute vec2 p;void main(){gl_Position=vec4(p,0.,1.);}';
+
+        function sh(t, s) {
+            const o = gl.createShader(t); gl.shaderSource(o, s); gl.compileShader(o); return o;
+        }
+        const pr = gl.createProgram();
+        gl.attachShader(pr, sh(gl.VERTEX_SHADER, V));
+        gl.attachShader(pr, sh(gl.FRAGMENT_SHADER, F));
+        gl.linkProgram(pr); gl.useProgram(pr);
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1,3,-1,-1,3]), gl.STATIC_DRAW);
+        const lp = gl.getAttribLocation(pr, 'p');
+        gl.enableVertexAttribArray(lp);
+        gl.vertexAttribPointer(lp, 2, gl.FLOAT, false, 0, 0);
+
+        const U = n => gl.getUniformLocation(pr, n);
+        const uR = U('u_res'), uT = U('u_time'), uRt = U('u_route');
+
+        function resize() {
+            cv.width  = innerWidth  * Math.min(devicePixelRatio, 2);
+            cv.height = innerHeight * Math.min(devicePixelRatio, 2);
+            gl.viewport(0, 0, cv.width, cv.height);
+        }
+        addEventListener('resize', resize); resize();
+
+        let t0 = performance.now();
+        (function loop(now) {
+            const t = (now - t0) / 1000;
+            routeSm += (0 - routeSm) * 0.05;
+            gl.uniform2f(uR, cv.width, cv.height);
+            gl.uniform1f(uT, t);
+            gl.uniform1f(uRt, routeSm);
+            gl.drawArrays(gl.TRIANGLES, 0, 3);
+            requestAnimationFrame(loop);
+        })(t0);
+    } else {
+        document.body.style.background = 'radial-gradient(100% 100% at 50% 100%, #1a1510 0%, #050505 100%)';
+    }
+
+    // ─── Entry animations (identical timing to design source) ─────────────────
+    document.addEventListener('DOMContentLoaded', async () => {
+        // Fetch event data first
+        await fetchEvent();
+
+        // Then animate in
+        const tl = gsap.timeline({ defaults: { ease: 'power4.out' } });
+        tl.to('#gl',              { opacity: 1, duration: 2, ease: 'power2.inOut' }, 0)
+          .to('.js-ui-top-left',  { x: 0, opacity: 1, duration: 1.5 }, 0.5)
+          .to('.js-ui-top-right', { scale: 1, opacity: 1, duration: 1.5, ease: 'expo.out' }, 0.6)
+          .to('.js-reveal-text',  { y: '0%', stagger: 0.1, duration: 1.2 }, 0.7)
+          .to('.js-ui-bottom-left',  { y: 0, opacity: 1, duration: 1.2 }, 1.0)
+          .to('.js-ui-bottom-right', { x: 0, opacity: 1, duration: 1.2 }, 1.1);
+
+        // Magnetic on static elements
+        document.querySelectorAll('.js-magnetic').forEach(applyMagnetic);
+
+        // Poll for live spot count every 30s
+        pollInterval = setInterval(fetchEvent, 30000);
+    });
+    </script>
+</body>
+</html>
