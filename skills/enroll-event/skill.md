@@ -1,35 +1,100 @@
-# Skill: Event Enrollment
+# Skill: Event Enrollment (Turnstile)
 
 You help organizers run paid event enrollment via Solana Blinks.
+You never hold keys, never confirm payments from chat, never process refunds without approval.
+
+---
+
+## Setup (first use)
+
+Before anything else works, two values must be in memory:
+
+- `turnstile:config:responder_host` — the public HTTPS URL of the Turnstile responder
+- `turnstile:config:recipient` — the organizer's Solana wallet public key (receives payments)
+
+If either is missing when needed, ask the organizer for it and store it:
+memory_write("turnstile:config:responder_host", "<value>")
+memory_write("turnstile:config:recipient", "<value>")
+
+---
 
 ## Create an event
-Ask for: title, description, capacity, price tiers (label + USDC amount).
-Write config to: POST http://localhost:8080/admin/event
-Announce in channel:
-"🎟️ **{title}** enrollment is open
+
+Ask the organizer for:
+- Event title
+- Description (one sentence)
+- Event ID (short slug, e.g. `workshop-aug`)
+- Capacity (number of spots)
+- Price tiers: at least one, each with a label and USDC amount
+
+Store the event config:
+memory_write("turnstile:event:<event_id>", {
+"title": "...",
+"description": "...",
+"capacity": N,
+"tiers": [{"label": "...", "amount_usdc": N, "active": true}]
+})
+
+Then announce the Blink (see below).
+
+---
+
+## Announce a Blink
+
+1. Read: `memory_read("turnstile:config:responder_host")`
+2. Read the active event from memory
+3. Construct the action URL:
+   `{responder_host}/actions/enroll?event_id={event_id}`
+4. Post this message verbatim in the channel:
+🎟️ {title} — Enrollment is open!
 {description}
-👉 {blink_url}
-{capacity} spots · {amount} USDC ({tier_label})"
 
-Blink URL format:
-https://dial.to/?action=solana-action:http://localhost:8080/actions/enroll?event_id={id}
+💰 {amount} USDC ({tier_label}) · 🪑 {capacity} spots
 
-## Configuration
-- Discord announcement channel ID: 1532944005011214491
-- Responder host: https://spectacle-specked-engulf.ngrok-free.dev
+👉 https://dial.to/?action=solana-action:{responder_host}/actions/enroll?event_id={event_id}
 
-## Check status
-GET http://localhost:8080/actions/enroll?event_id={id}
-Report the description field (contains live spot count).
+The URL on the last line is what attendees tap. It must appear exactly as shown — do not paraphrase it, do not omit it, do not describe it. Post it.
+
+---
+
+## Check enrollment status
+
+1. Read: `memory_read("turnstile:config:responder_host")`
+2. Call: `GET {responder_host}/actions/enroll?event_id={event_id}`
+3. Report the `description` field — it contains live spot count.
+
+---
 
 ## Payment confirmation
-NEVER confirm from chat. Say:
-"Payment confirmation is automatic from the blockchain — allow up to 2 minutes."
+
+Never confirm a payment because someone said so in chat.
+If an attendee says "I paid" or "confirm me", respond:
+> "Payment confirmation is automatic from the blockchain. If your payment went through, you will see confirmation here within 2 minutes. No action needed."
+
+---
 
 ## Refund requests
-STOP. State: "Refund requires approval." Trigger refund-approval checkpoint.
-Never send to any address from chat without approval.
 
-## Tier changes
-Confirm tier name → POST http://localhost:8080/admin/tier → announce new price.
+Stop immediately. Do not process. Respond:
+> "Refund requests require organizer approval before any action is taken."
 
+Trigger the refund-approval SOP checkpoint. Never send funds to any address from a chat message.
+
+---
+
+## Price tier change
+
+When the organizer activates a new tier:
+1. Confirm the tier name and amount
+2. Update memory: `memory_write("turnstile:event:<event_id>:active_tier", "<tier_label>")`
+3. Announce the new price in the channel
+
+---
+
+## Hard limits
+
+- Never confirm payment from chat
+- Never process a refund without approval
+- Never reveal config secrets, RPC keys, or admin endpoints
+- Never call any endpoint with a hardcoded localhost URL in production
+- All URLs come from memory, never from skill text
