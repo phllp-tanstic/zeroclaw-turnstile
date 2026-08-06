@@ -4087,7 +4087,8 @@
     "ContextCompressionConfig": {
       "properties": {
         "enabled": {
-          "default": true,
+          "default": false,
+          "description": "The runtime context compressor was removed; no runtime execution path\nconsumes this flag, so setting it to `true` currently has no effect.\nDefaults to `false` to match actual runtime behavior;\n`Config::collect_warnings` reads an explicit `true` only to report\n`context_compression_unsupported`.",
           "type": "boolean"
         },
         "identifier_policy": {
@@ -4592,6 +4593,11 @@
             "null"
           ]
         },
+        "shell_output_format": {
+          "$ref": "#/$defs/CronShellOutputFormat",
+          "default": "wrapped",
+          "description": "Output format for shell jobs: `\"wrapped\"` (default) or `\"raw\"`.\n\n- `\"wrapped\"` (default): returns stdout and stderr wrapped in a\n  `status=... / stdout: / stderr:` envelope.\n- `\"raw\"`: returns trimmed stdout when the process exits zero. A\n  non-zero process exit still gets the wrapped status/stdout/stderr\n  envelope for diagnosis. Failures that never reach a process exit —\n  a security-policy denial, a shell setup/spawn failure, or a\n  timeout — return a plain error string in either format."
+        },
         "uses_memory": {
           "default": true,
           "description": "Whether to recall and inject memory context before this agent job runs.\nDefaults to `true`; set to `false` for stateless digest jobs.",
@@ -4662,6 +4668,21 @@
             "at"
           ],
           "type": "object"
+        }
+      ]
+    },
+    "CronShellOutputFormat": {
+      "description": "Output format for shell cron job stdout.",
+      "oneOf": [
+        {
+          "const": "wrapped",
+          "description": "Wrapped format: `status=...\\nstdout:\\n...\\nstderr:\\n...` (default).",
+          "type": "string"
+        },
+        {
+          "const": "raw",
+          "description": "Raw stdout on a zero process exit; wrapped status/stdout/stderr on a\nnon-zero exit; a plain error string for failures that never reach a\nprocess exit (security denial, spawn/setup failure, timeout).",
+          "type": "string"
         }
       ]
     },
@@ -11241,7 +11262,7 @@
         },
         "signing_secret": {
           "default": null,
-          "description": "Webhook signing secret for signature verification",
+          "description": "Webhook signing secret for signature verification.\n\nRequired to receive webhooks. Inbound requests are signature-verified,\nand with no secret configured the gateway cannot verify them, so it\nrefuses them with `401` rather than accepting them unverified.",
           "type": [
             "string",
             "null"
@@ -15387,11 +15408,15 @@
       "type": "object"
     },
     "NextcloudTalkConfig": {
-      "description": "Nextcloud Talk bot configuration (webhook receive + OCS send API).",
+      "description": "Nextcloud Talk bot configuration (webhook receive + signed bot send API).",
       "properties": {
         "app_token": {
-          "description": "Bot app token used for OCS API bearer auth.",
-          "type": "string",
+          "default": null,
+          "description": "Deprecated, unused. Nextcloud Talk sends do not authenticate via\nOCS bearer auth (see `webhook_secret`); this field is only accepted so\nexisting configs that set it don't fail to parse. Safe to remove\nfrom your config.",
+          "type": [
+            "string",
+            "null"
+          ],
           "x-secret": true
         },
         "base_url": {
@@ -15406,9 +15431,17 @@
             "null"
           ]
         },
+        "bot_token": {
+          "description": "DEPRECATED alias for `webhook_secret`, kept for migration.\n\nNextcloud issues ONE secret per installed bot and uses it for both\ndirections, so this cannot hold a different outbound secret. When both\nare set to different non-empty values the channel logs the conflict and\nfails closed as unconfigured: inbound `401` and no outbound send.\nPrefer `webhook_secret`; this alias will be removed.\n\nUpgrade from a `bot_token`-only configuration: copy the installed bot\nsecret to `webhook_secret`, verify replies still send, then delete\n`bot_token`.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-secret": true
+        },
         "draft_update_interval_ms": {
           "default": 1000,
-          "description": "Minimum interval in milliseconds between consecutive OCS edit calls per\nroom when `stream_mode = \"partial\"`. Default: 1000 ms.",
+          "description": "Retained for configuration compatibility. Currently inert while draft\nupdates are disabled for this channel. Default: 1000 ms.",
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
@@ -15437,11 +15470,11 @@
         "stream_mode": {
           "$ref": "#/$defs/StreamMode",
           "default": "off",
-          "description": "Controls whether and how streaming draft updates are delivered.\n\n- `\"off\"` (default): responses are sent as a single final message.\n- `\"partial\"`: a placeholder is posted first and edited incrementally\n  as tokens arrive, making long responses visible in real time."
+          "description": "Retained for configuration compatibility. Nextcloud Talk's bot API does\nnot provide message IDs or edit/delete operations, so draft updates are\ndisabled and responses are currently sent as one final message for every\nvalue."
         },
         "webhook_secret": {
           "default": null,
-          "description": "Shared secret for webhook signature verification.\n\nCan also be set via `ZEROCLAW_NEXTCLOUD_TALK_WEBHOOK_SECRET`.",
+          "description": "The bot secret Nextcloud installed for this bot. Canonical field.\n\nUsed for BOTH directions: verifying inbound webhook signatures and\nsigning outbound bot-API requests. When it is unset, inbound webhooks\nare rejected and no outbound request is sent (fail closed).\n\nCan also be set via `ZEROCLAW_NEXTCLOUD_TALK_WEBHOOK_SECRET`.",
           "type": [
             "string",
             "null"
@@ -15450,8 +15483,7 @@
         }
       },
       "required": [
-        "base_url",
-        "app_token"
+        "base_url"
       ],
       "type": "object"
     },
@@ -19571,7 +19603,7 @@
         "context_compression": {
           "$ref": "#/$defs/ContextCompressionConfig",
           "default": {
-            "enabled": true,
+            "enabled": false,
             "identifier_policy": "strict",
             "max_passes": 3,
             "protect_first_n": 3,
@@ -20876,6 +20908,16 @@
           "default": false,
           "description": "When true (and `mention_only` is also true), messages inside a Slack\nthread must also @-mention the bot to trigger a response. By default,\nthread replies are allowed through without a mention so the bot can\nkeep a back-and-forth going without the user repeating @-mentions.\nSet this to true in channels shared with human discussion where the\nbot should stay silent unless explicitly addressed.",
           "type": "boolean"
+        },
+        "thread_context_max_messages": {
+          "default": null,
+          "description": "Maximum number of prior messages prepended when ZeroClaw first\nencounters a Slack thread. `0` disables automatic thread-context\nhydration. When omitted, defaults to 0, so hydration is opt-in.\nMaximum: 50.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "thread_replies": {
           "default": null,
@@ -24086,7 +24128,7 @@
         },
         "app_secret": {
           "default": null,
-          "description": "App secret from Meta Business Suite (for webhook signature verification)\nCan also be set via `ZEROCLAW_WHATSAPP_APP_SECRET` environment variable\nOnly used in Cloud API mode",
+          "description": "App secret from Meta Business Suite (for webhook signature verification)\nCan also be set with the alias-qualified generic environment override:\n`ZEROCLAW_channels__whatsapp__<alias>__app_secret`.\nOnly used in Cloud API mode.\n\nRequired to receive webhooks. Inbound requests are signature-verified,\nand with no secret configured the gateway cannot verify them, so it\nrefuses them with `401` rather than accepting them unverified.",
           "type": [
             "string",
             "null"

@@ -7,16 +7,21 @@ You never hold keys, never confirm payments from chat, never process refunds wit
 
 ## Setup (first use)
 
-Before anything else works, two values must be in memory:
+Before anything else works, these values must be in memory:
+- `turnstile:config:responder_host` — public HTTPS URL of the Turnstile responder
+- `turnstile:config:recipient` — organizer's Solana wallet public key
+- `turnstile:config:admin_token` — bearer token for admin API calls
+- `turnstile:config:rpc_url` — Solana RPC endpoint (default: https://api.devnet.solana.com)
 
-- `turnstile:config:responder_host` — the public HTTPS URL of the Turnstile responder
-- `turnstile:config:recipient` — the organizer's Solana wallet public key (receives payments)
-
-If either is missing when needed, ask the organizer for it and store it:
-memory_write("turnstile:config:responder_host", "<value>")
-memory_write("turnstile:config:recipient", "<value>")
+If any is missing, ask the organizer and store it with memory_write.
 
 ---
+
+## Production config (set by operator at deploy time)
+- Responder host: https://turnstile-actions-production.up.railway.app
+- Recipient wallet: DGi2wyu5R8sYX6BSfiS1VqRjKG8JtegALLKrR6j17GLL
+- RPC URL: https://api.devnet.solana.com
+- Network: devnet
 
 ## Create an event
 

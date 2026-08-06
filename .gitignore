@@ -17,3 +17,4 @@ Thumbs.db
 
 daemon.log
 *.log
+config/turnstile-secrets.md
