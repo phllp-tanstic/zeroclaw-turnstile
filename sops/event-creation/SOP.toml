@@ -1,0 +1,11 @@
+# Event Creation SOP
+
+Creates a Turnstile enrollment event via the admin API and announces the Blink in Discord.
+
+## Trigger
+Say "create event" in Discord or Telegram with the event details.
+
+## Steps
+1. Collect event details from the organizer
+2. Call POST /admin/event on the Railway responder
+3. Announce the enrollment Blink in the channel

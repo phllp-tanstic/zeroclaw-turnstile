@@ -41,10 +41,21 @@ pub struct PriceTier {
     pub active:      bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RosterState {
     pub confirmed:  u32,
     pub waitlisted: u32,
+}
+
+/// On-disk shape of the state file. The event fields stay at the top level so
+/// files written by earlier versions (a bare `EventConfig`) still load; the
+/// roster is an additive field that defaults to zero when absent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PersistedState {
+    #[serde(flatten)]
+    pub event:  EventConfig,
+    #[serde(default)]
+    pub roster: RosterState,
 }
 
 #[derive(Debug)]
@@ -59,14 +70,24 @@ pub struct AppState {
 
 impl AppState {
     pub fn load(state_path: PathBuf) -> Arc<Self> {
-        let event = if state_path.exists() {
+        let (event, roster) = if state_path.exists() {
             let raw = fs::read_to_string(&state_path).unwrap_or_default();
-            serde_json::from_str(&raw).ok()
+            match serde_json::from_str::<PersistedState>(&raw) {
+                Ok(p)  => (Some(p.event), p.roster),
+                // Legacy state files hold a bare EventConfig with no roster.
+                Err(_) => (
+                    serde_json::from_str::<EventConfig>(&raw).ok(),
+                    RosterState::default(),
+                ),
+            }
         } else {
-            None
+            (None, RosterState::default())
         };
 
-        let rpc_url = std::env::var("TURNSTILE_RPC_URL")
+        // TURNSTILE_RPC is the documented name; TURNSTILE_RPC_URL is kept as a
+        // fallback so existing deployments keep working.
+        let rpc_url = std::env::var("TURNSTILE_RPC")
+            .or_else(|_| std::env::var("TURNSTILE_RPC_URL"))
             .unwrap_or_else(|_| "https://api.devnet.solana.com".into());
 
         let recipient = std::env::var("TURNSTILE_RECIPIENT")
@@ -78,7 +99,7 @@ impl AppState {
 
         Arc::new(Self {
             event:  RwLock::new(event),
-            roster: RwLock::new(RosterState { confirmed: 0, waitlisted: 0 }),
+            roster: RwLock::new(roster),
             state_path,
             rpc_url,
             recipient,
@@ -174,8 +195,11 @@ struct AdminTierBody {
 
 #[derive(Deserialize)]
 struct AdminConfirmBody {
-    reference_key: String,
-    signature:     String,
+    event_id:  String,
+    /// `ref` is a Rust keyword, so the wire name is mapped onto `reference`.
+    #[serde(rename = "ref")]
+    reference: String,
+    signature: String,
 }
 
 // ── Handlers ─────────────────────────────────────────────────────────────────
@@ -357,12 +381,23 @@ async fn admin_event(
         tiers:       body.tiers,
     };
 
+    // Reset in-memory state first so the roster reset is what gets persisted;
+    // persisting before the reset would write the previous event's count.
+    match state.event.write() {
+        Ok(mut g)  => *g = Some(config.clone()),
+        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
+            "error": "state lock poisoned"
+        }))).into_response(),
+    }
+    match state.roster.write() {
+        Ok(mut g)  => *g = RosterState::default(),
+        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
+            "error": "roster lock poisoned"
+        }))).into_response(),
+    }
+
     match persist_state(&state, &config) {
-        Ok(_) => {
-            *state.event.write().unwrap()  = Some(config.clone());
-            *state.roster.write().unwrap() = RosterState { confirmed: 0, waitlisted: 0 };
-            Json(serde_json::json!({ "ok": true, "event_id": config.event_id })).into_response()
-        }
+        Ok(_)  => Json(serde_json::json!({ "ok": true, "event_id": config.event_id })).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
             "error": format!("persist failed: {e}")
         }))).into_response(),
@@ -416,20 +451,54 @@ async fn admin_confirm(
         return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({ "error": "unauthorized" }))).into_response();
     }
 
-    let mut roster = state.roster.write().unwrap();
-    roster.confirmed = roster.confirmed.saturating_add(1);
-    let confirmed = roster.confirmed;
-    drop(roster);
+    // A confirmation only counts against the currently active event, so a stale
+    // cron tick for a previous event cannot inflate this event's roster.
+    let event = match state.event.read() {
+        Ok(g)  => g.clone(),
+        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
+            "error": "state lock poisoned"
+        }))).into_response(),
+    };
+
+    let event = match event {
+        Some(e) if e.event_id == body.event_id => e,
+        Some(e) => return (StatusCode::NOT_FOUND, Json(serde_json::json!({
+            "error":        "event_id does not match the active event",
+            "requested":    body.event_id,
+            "active_event": e.event_id,
+        }))).into_response(),
+        None => return (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({
+            "error": "no active event"
+        }))).into_response(),
+    };
+
+    let confirmed = {
+        let mut roster = match state.roster.write() {
+            Ok(g)  => g,
+            Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
+                "error": "roster lock poisoned"
+            }))).into_response(),
+        };
+        roster.confirmed = roster.confirmed.saturating_add(1);
+        roster.confirmed
+    }; // write guard dropped before persist_state takes a read guard
+
+    if let Err(e) = persist_state(&state, &event) {
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
+            "error": format!("persist failed: {e}")
+        }))).into_response();
+    }
 
     println!(
-        "[confirm] ref={} sig={} total_confirmed={}",
-        body.reference_key, body.signature, confirmed
+        "[confirm] event={} ref={} sig={} total_confirmed={}",
+        body.event_id, body.reference, body.signature, confirmed
     );
 
     Json(serde_json::json!({
-        "ok": true,
-        "confirmed": confirmed,
-        "reference_key": body.reference_key,
+        "ok":              true,
+        "confirmed":       confirmed,
+        "spots_remaining": event.capacity.saturating_sub(confirmed),
+        "ref":             body.reference,
     })).into_response()
 }
 
@@ -449,9 +518,23 @@ fn persist_state(state: &AppState, config: &EventConfig) -> Result<(), String> {
     if let Some(parent) = state.state_path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    let json = serde_json::to_string_pretty(config).map_err(|e| e.to_string())?;
-    let mut file = fs::File::create(&state.state_path).map_err(|e| e.to_string())?;
-    file.write_all(json.as_bytes()).map_err(|e| e.to_string())?;
+
+    // Persist the roster alongside the event so a restart does not reset the
+    // confirmed count and silently hand out already-sold spots again.
+    let roster = state.roster.read().map_err(|_| "roster lock poisoned".to_string())?.clone();
+    let persisted = PersistedState { event: config.clone(), roster };
+
+    let json = serde_json::to_string_pretty(&persisted).map_err(|e| e.to_string())?;
+
+    // Write to a temp file and rename so a crash mid-write cannot truncate the
+    // existing state file.
+    let tmp_path = state.state_path.with_extension("json.tmp");
+    {
+        let mut file = fs::File::create(&tmp_path).map_err(|e| e.to_string())?;
+        file.write_all(json.as_bytes()).map_err(|e| e.to_string())?;
+        file.sync_all().map_err(|e| e.to_string())?;
+    }
+    fs::rename(&tmp_path, &state.state_path).map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -506,6 +589,7 @@ const USDC_MINT_MAINNET: &str = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const SPL_TOKEN_PROGRAM: &str = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 const ATA_PROGRAM:       &str = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJe8bv";
 const MEMO_PROGRAM:      &str = "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr";
+const SYSTEM_PROGRAM:    &str = "11111111111111111111111111111111";
 
 /// Derive Associated Token Account using spl-associated-token-account
 fn get_ata(wallet: &Pubkey, mint: &Pubkey) -> Pubkey {
@@ -526,6 +610,7 @@ fn build_usdc_transfer(
     let spl_pk   = Pubkey::from_str(SPL_TOKEN_PROGRAM).unwrap();
     let ata_pk   = Pubkey::from_str(ATA_PROGRAM).unwrap();
     let memo_pk  = Pubkey::from_str(MEMO_PROGRAM).unwrap();
+    let sys_pk   = Pubkey::from_str(SYSTEM_PROGRAM).unwrap();
 
     let source_ata = get_ata(payer, &mint_pk);
     let dest_ata   = get_ata(recipient, &mint_pk);
@@ -540,8 +625,7 @@ fn build_usdc_transfer(
             AccountMeta { pubkey: source_ata, is_signer: false, is_writable: true  },
             AccountMeta { pubkey: *payer,    is_signer: false, is_writable: false },
             AccountMeta { pubkey: mint_pk,   is_signer: false, is_writable: false },
-            AccountMeta { pubkey: Pubkey::from_str("11111111111111111111111111111111").unwrap(),
-                          is_signer: false, is_writable: false },
+            AccountMeta { pubkey: sys_pk,    is_signer: false, is_writable: false },
             AccountMeta { pubkey: spl_pk,    is_signer: false, is_writable: false },
         ],
         // Instruction discriminator 1 = CreateIdempotent
@@ -556,8 +640,7 @@ fn build_usdc_transfer(
             AccountMeta { pubkey: dest_ata,  is_signer: false, is_writable: true  },
             AccountMeta { pubkey: *recipient, is_signer: false, is_writable: false },
             AccountMeta { pubkey: mint_pk,   is_signer: false, is_writable: false },
-            AccountMeta { pubkey: Pubkey::from_str("11111111111111111111111111111111").unwrap(),
-                          is_signer: false, is_writable: false },
+            AccountMeta { pubkey: sys_pk,    is_signer: false, is_writable: false },
             AccountMeta { pubkey: spl_pk,    is_signer: false, is_writable: false },
         ],
         data: vec![1u8],
@@ -652,19 +735,25 @@ async fn main() -> anyhow::Result<()> {
 
     let state = AppState::load(state_path);
 
+    // CORS is applied to the public router only. Admin routes are never
+    // browser-reachable cross-origin.
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
         .allow_headers(Any);
 
-    let app = Router::new()
+    let public = Router::new()
         .route("/.well-known/actions.json", get(actions_json))
         .route("/actions/enroll",           get(enroll_get).post(enroll_post))
         .route("/health",                   get(health))
-        .route("/admin/event",              post(admin_event))
-        .route("/admin/tier",               post(admin_tier))
-        .route("/admin/confirm",            post(admin_confirm))
         .layer(cors)
+        .with_state(state.clone());
+
+    // No CORS layer here — bearer auth is the access control.
+    let admin = Router::new()
+        .route("/admin/event",   post(admin_event))
+        .route("/admin/tier",    post(admin_tier))
+        .route("/admin/confirm", post(admin_confirm))
         .with_state(state);
 
     let port: u16 = std::env::var("PORT")
@@ -672,11 +761,52 @@ async fn main() -> anyhow::Result<()> {
         .and_then(|p| p.parse().ok())
         .unwrap_or(8080);
 
-    let addr = SocketAddr::from(([0, 0, 0, 0], port));
-    println!("turnstile-actions listening on http://{}", addr);
+    // TURNSTILE_ADMIN_BIND selects where the admin router is served:
+    //   "shared" (default) — merged onto the public listener, reachable through
+    //                        the deployment's single exposed port, bearer-only.
+    //   "local"            — its own listener on 127.0.0.1 only. Remote callers
+    //                        (e.g. a ZeroClaw cron on another host) cannot reach
+    //                        it; use this when the responder runs beside the agent.
+    let admin_bind = std::env::var("TURNSTILE_ADMIN_BIND")
+        .unwrap_or_else(|_| "shared".into())
+        .to_lowercase();
 
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
+    let public_addr = SocketAddr::from(([0, 0, 0, 0], port));
+
+    match admin_bind.as_str() {
+        "local" => {
+            let admin_port: u16 = std::env::var("TURNSTILE_ADMIN_PORT")
+                .ok()
+                .and_then(|p| p.parse().ok())
+                .unwrap_or_else(|| port.saturating_add(1));
+            let admin_addr = SocketAddr::from(([127, 0, 0, 1], admin_port));
+
+            println!("turnstile-actions (public) listening on http://{}", public_addr);
+            println!("turnstile-actions (admin)  listening on http://{} — localhost only", admin_addr);
+
+            let public_listener = tokio::net::TcpListener::bind(public_addr).await?;
+            let admin_listener  = tokio::net::TcpListener::bind(admin_addr).await?;
+
+            let public_srv = axum::serve(public_listener, public);
+            let admin_srv  = axum::serve(admin_listener, admin);
+
+            tokio::try_join!(public_srv.into_future(), admin_srv.into_future())?;
+        }
+        _ => {
+            if admin_bind != "shared" {
+                eprintln!(
+                    "warning: unrecognised TURNSTILE_ADMIN_BIND={admin_bind:?}, falling back to \"shared\""
+                );
+            }
+
+            println!("turnstile-actions listening on http://{}", public_addr);
+            println!("admin routes served on the same listener (bearer auth, no CORS)");
+
+            let app = public.merge(admin);
+            let listener = tokio::net::TcpListener::bind(public_addr).await?;
+            axum::serve(listener, app).await?;
+        }
+    }
 
     Ok(())
 }

@@ -49,9 +49,14 @@ the error to `turnstile:rpc_errors` in memory.
 
 ### 5. Blockhash expiry
 **Attack surface:** A transaction built during GET becomes stale before POST.
-**Mitigation:** The responder uses zero blockhash — the wallet fetches a
-fresh blockhash at sign time. For refund transactions that must survive an
-approval queue wait, durable nonce accounts are used.
+**Mitigation:** The responder fetches a live blockhash from the configured RPC
+(`getLatestBlockhash`, `confirmed` commitment) at POST time, immediately before
+building the transaction, so the returned transaction carries a fresh blockhash
+rather than a placeholder. A blockhash is valid for roughly 60–90 seconds; if
+the attendee takes longer to sign, the wallet surfaces the expiry and the
+attendee retries, which issues a new transaction with a new blockhash. For
+refund transactions that must survive an approval queue wait, durable nonce
+accounts are used.
 
 ### 6. Malicious event config injection
 **Attack surface:** Someone sends a message trying to override the responder
@@ -63,9 +68,30 @@ as authoritative config.
 
 ### 7. Admin endpoint exposure
 **Attack surface:** The responder's `/admin/*` endpoints exposed publicly.
-**Mitigation:** Admin endpoints are localhost-only by design. The ngrok
-tunnel only exposes `/actions/*`, `/health`, and `/.well-known/*`.
-In production, admin endpoints should be firewall-restricted.
+**Mitigation:** Admin endpoints are protected by bearer token authentication
+(`TURNSTILE_ADMIN_TOKEN`); requests without a matching `Authorization: Bearer`
+header are rejected with 401, and auth fails closed when the token is unset.
+They are served on a separate router with no CORS layer, so they are not
+reachable cross-origin from a browser.
+
+By default (`TURNSTILE_ADMIN_BIND=shared`) the admin router is served on the
+same listener as the public routes and is therefore reachable from the public
+internet — the bearer token is the only access control. This is required for
+hosted deployments such as Railway, which expose a single port, and where the
+ZeroClaw agent calls `/admin/*` remotely. Setting `TURNSTILE_ADMIN_BIND=local`
+moves the admin router to its own `127.0.0.1`-only listener, which is
+appropriate when the responder runs on the same host as the agent.
+
+In production, admin endpoints should additionally be firewall-restricted, and
+the admin token should be rotated if it has ever been committed or shared.
+
+**ngrok:** an ngrok tunnel forwards the entire port, not a path subset. When the
+responder is exposed via ngrok, `/admin/*` is tunnelled along with `/actions/*`,
+`/health`, and `/.well-known/*`, and is protected only by the bearer token.
+Operators who need path-level restriction must enforce it explicitly — via ngrok
+path rules / traffic policy, or by placing a reverse proxy in front that blocks
+`/admin/*` — rather than assuming the tunnel scopes access.
+
 
 ## Security assumptions
 
