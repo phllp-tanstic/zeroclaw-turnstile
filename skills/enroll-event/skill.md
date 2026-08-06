@@ -41,17 +41,18 @@ Then announce the Blink (see below).
 
 ## Announce a Blink
 
-1. Read: `memory_read("turnstile:config:responder_host")`
-2. Read the active event from memory
-3. Construct the action URL:
-   `{responder_host}/actions/enroll?event_id={event_id}`
+1. Read responder host from memory: memory_read("turnstile:config:responder_host")
+2. Read event details from memory
+3. Construct the enrollment page URL:
+   https://turnstile-enrollment.vercel.app/?responder={responder_host}&event_id={event_id}
 4. Post this message verbatim in the channel:
-🎟️ {title} — Enrollment is open!
+
+🎟️ **{title}** — Enrollment is open!
 {description}
 
 💰 {amount} USDC ({tier_label}) · 🪑 {capacity} spots
 
-👉 https://dial.to/?action=solana-action:{responder_host}/actions/enroll?event_id={event_id}
+👉 https://turnstile-enrollment.vercel.app/?responder={responder_host}&event_id={event_id}
 
 The URL on the last line is what attendees tap. It must appear exactly as shown — do not paraphrase it, do not omit it, do not describe it. Post it.
 
