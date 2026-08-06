@@ -184,16 +184,22 @@
             const fullAction = actionHref.startsWith('http')
                 ? actionHref
                 : `${RESPONDER}${actionHref}`;
-            const blinkUrl = `solana-action:${fullAction}`;
-            $enrollBtn.href = blinkUrl;
+            const phantomUrl = `https://phantom.app/ul/browse/${encodeURIComponent(fullAction)}?ref=${encodeURIComponent(window.location.href)}`;
+            $enrollBtn.href = phantomUrl;
+            $enrollBtn.target = '_blank';
         }
+            // Phantom universal deeplink — works on mobile and desktop
+            const phantomUrl = `https://phantom.app/ul/browse/${encodeURIComponent(fullAction)}?ref=${encodeURIComponent(window.location.href)}`;
+            $enrollBtn.href = phantomUrl;
+            $enrollBtn.target = '_blank';
+            }
 
         if (soldOut) {
             $enrollLabel.textContent = 'Join waitlist';
             $enrollSub.textContent   = 'Sold out — join the waitlist';
         } else {
             $enrollLabel.textContent = 'Enroll now';
-            $enrollSub.textContent   = 'Opens in your Solana wallet';
+            $enrollSub.textContent = 'Opens Phantom wallet to sign';
         }
 
         // Parse tiers from label if multiple actions exist
@@ -214,7 +220,6 @@
             tiers = [{ label: 'Early Bird', amount: priceMatch[1], href: actionHref }];
             renderTiers();
         }
-    }
 
     function renderTiers() {
         $tierButtons.innerHTML = '';

@@ -1,9 +1,9 @@
 use axum::{
     Router,
     extract::{Query, State},
-    http::{Method, StatusCode},
+    http::{HeaderMap, Method, StatusCode},
     response::{IntoResponse, Json},
-    routing::{get},
+    routing::{get, post},
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -13,6 +13,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 use tower_http::cors::{Any, CorsLayer};
+use std::io::Write;
 
 // ── State ────────────────────────────────────────────────────────────────────
 
@@ -129,7 +130,21 @@ struct EnrollQuery {
 struct EnrollPostBody {
     account: String,           // attendee's base58 public key
 }
+#[derive(Deserialize)]
+struct AdminEventBody {
+    event_id:    String,
+    title:       String,
+    description: String,
+    icon_url:    String,
+    capacity:    u32,
+    tiers:       Vec<PriceTier>,
+}
 
+#[derive(Deserialize)]
+struct AdminTierBody {
+    event_id:    String,
+    tier_label:  String,
+}
 // ── Handlers ─────────────────────────────────────────────────────────────────
 
 /// GET /.well-known/actions.json
@@ -280,6 +295,117 @@ async fn enroll_post(
             "error": format!("transaction build failed: {e}")
         }))).into_response(),
     }
+}
+
+/// POST /admin/event — create or update event (requires Authorization header)
+async fn admin_event(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<AdminEventBody>,
+) -> impl IntoResponse {
+    // Verify admin token
+    if !check_admin_auth(&headers) {
+        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({
+            "error": "unauthorized"
+        }))).into_response();
+    }
+
+    let config = EventConfig {
+        event_id:    body.event_id,
+        title:       body.title,
+        description: body.description,
+        icon_url:    body.icon_url,
+        capacity:    body.capacity,
+        tiers:       body.tiers,
+    };
+
+    // Write to state file
+    match persist_state(&state, &config) {
+        Ok(_) => {
+            let mut event = state.event.write().unwrap();
+            *event = Some(config.clone());
+            let mut roster = state.roster.write().unwrap();
+            *roster = RosterState { confirmed: 0, waitlisted: 0 };
+            Json(serde_json::json!({
+                "ok": true,
+                "event_id": config.event_id
+            })).into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
+            "error": format!("failed to persist state: {e}")
+        }))).into_response(),
+    }
+}
+
+/// POST /admin/tier — activate a price tier (requires Authorization header)
+async fn admin_tier(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<AdminTierBody>,
+) -> impl IntoResponse {
+    if !check_admin_auth(&headers) {
+        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({
+            "error": "unauthorized"
+        }))).into_response();
+    }
+
+    let mut event_guard = state.event.write().unwrap();
+    let event = match event_guard.as_mut() {
+        Some(e) if e.event_id == body.event_id => e,
+        _ => return (StatusCode::NOT_FOUND, Json(serde_json::json!({
+            "error": "event not found"
+        }))).into_response(),
+    };
+
+    let mut found = false;
+    for tier in &mut event.tiers {
+        if tier.label.to_lowercase() == body.tier_label.to_lowercase() {
+            tier.active = true;
+            found = true;
+        } else {
+            tier.active = false;
+        }
+    }
+
+    if !found {
+        return (StatusCode::NOT_FOUND, Json(serde_json::json!({
+            "error": "tier not found"
+        }))).into_response();
+    }
+
+    let config = event.clone();
+    drop(event_guard);
+
+    match persist_state(&state, &config) {
+        Ok(_) => Json(serde_json::json!({
+            "ok": true,
+            "active_tier": body.tier_label
+        })).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
+            "error": format!("persist failed: {e}")
+        }))).into_response(),
+    }
+}
+
+fn check_admin_auth(headers: &HeaderMap) -> bool {
+    let admin_token = std::env::var("TURNSTILE_ADMIN_TOKEN")
+        .unwrap_or_default();
+    if admin_token.is_empty() { return false; }
+    
+    headers.get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v == format!("Bearer {}", admin_token))
+        .unwrap_or(false)
+}
+
+fn persist_state(state: &AppState, config: &EventConfig) -> Result<(), String> {
+    let json = serde_json::to_string_pretty(config)
+        .map_err(|e| e.to_string())?;
+    let mut file = std::fs::File::create(&state.state_path)
+        .map_err(|e| e.to_string())?;
+    file.write_all(json.as_bytes())
+        .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 /// Health check
@@ -474,7 +600,8 @@ mod solana_tx {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let state_path = PathBuf::from(
-        std::env::var("TURNSTILE_STATE").unwrap_or_else(|_| "turnstile-state.json".into()),
+    std::env::var("TURNSTILE_STATE")
+        .unwrap_or_else(|_| "/data/turnstile-state.json".into()),
     );
 
     let state = AppState::load(state_path);
@@ -487,8 +614,9 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/.well-known/actions.json", get(actions_json))
         .route("/actions/enroll",           get(enroll_get).post(enroll_post))
-        .route("/health",                   get(health))
-        .layer(cors)
+        .route("/health",        get(health))
+        .route("/admin/event",   post(admin_event))
+        .route("/admin/tier",    post(admin_tier))
         .with_state(state);
 
     let port: u16 = std::env::var("PORT")

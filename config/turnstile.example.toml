@@ -29,3 +29,7 @@ port = 8080
 
 # Path to the shared state file the responder reads and the agent writes.
 state_path = "responder/turnstile-state.json"
+
+# Admin token for the Turnstile Actions responder
+# Set this via environment variable, never commit the real value
+admin_token = "YOUR_ADMIN_TOKEN_HERE"
