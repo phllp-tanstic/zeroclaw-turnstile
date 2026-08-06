@@ -617,6 +617,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/health",        get(health))
         .route("/admin/event",   post(admin_event))
         .route("/admin/tier",    post(admin_tier))
+        .layer(cors)
         .with_state(state);
 
     let port: u16 = std::env::var("PORT")
