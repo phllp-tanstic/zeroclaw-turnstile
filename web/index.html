@@ -152,7 +152,7 @@
     }
 
     function applyEventData(data) {
-        // Parse spots from description field e.g. "...50 spot(s) remaining..."
+        // Parse spots from description field
         const spotsMatch = data.description.match(/(\d+)\s+spot/i);
         const spots = spotsMatch ? parseInt(spotsMatch[1]) : null;
         const soldOut = data.label && data.label.toLowerCase().includes('waitlist');
@@ -161,7 +161,7 @@
         $eventLabel.textContent = data.title || 'Event Enrollment';
         $eventDesc.textContent  = (data.description || '').split('\n')[0];
 
-        // Spots
+        // Spots display
         if (soldOut) {
             $spotsCount.textContent = '0';
             $spotsLabel.textContent = 'spots';
@@ -184,42 +184,73 @@
             const fullAction = actionHref.startsWith('http')
                 ? actionHref
                 : `${RESPONDER}${actionHref}`;
-            const phantomUrl = `https://phantom.app/ul/browse/${encodeURIComponent(fullAction)}?ref=${encodeURIComponent(window.location.href)}`;
-            $enrollBtn.href = phantomUrl;
-            $enrollBtn.target = '_blank';
+
+            $enrollBtn.addEventListener('click', async (e) => {
+                e.preventDefault();
+
+                // Check if Phantom extension is injected
+                const phantom = window?.phantom?.solana || window?.solana;
+
+                if (phantom?.isPhantom) {
+                    // Desktop with Phantom extension — fetch and sign directly
+                    try {
+                        const conn = await phantom.connect();
+                        const pubkey = conn.publicKey.toString();
+
+                        const res = await fetch(`${fullAction}`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ account: pubkey })
+                        });
+                        const { transaction } = await res.json();
+
+                        // Decode base64 transaction
+                        const txBytes = Uint8Array.from(atob(transaction), c => c.charCodeAt(0));
+
+                        // Sign and send
+                        const { signature } = await phantom.signAndSendTransaction(
+                            { serialize: () => txBytes }
+                        );
+
+                        $enrollLabel.textContent = '✓ Enrolled!';
+                        $enrollSub.textContent   = `Sig: ${signature.slice(0,8)}...`;
+                    } catch (err) {
+                        $enrollSub.textContent = `Error: ${err.message}`;
+                    }
+                } else {
+                    // No extension — open in Phantom mobile in-app browser
+                    const pageUrl = encodeURIComponent(window.location.href);
+                    window.open(`https://phantom.app/ul/browse/${pageUrl}`, '_blank');
+                }
+            });
         }
-            // Phantom universal deeplink — works on mobile and desktop
-            const phantomUrl = `https://phantom.app/ul/browse/${encodeURIComponent(fullAction)}?ref=${encodeURIComponent(window.location.href)}`;
-            $enrollBtn.href = phantomUrl;
-            $enrollBtn.target = '_blank';
-            }
 
         if (soldOut) {
             $enrollLabel.textContent = 'Join waitlist';
             $enrollSub.textContent   = 'Sold out — join the waitlist';
         } else {
             $enrollLabel.textContent = 'Enroll now';
-            $enrollSub.textContent = 'Opens Phantom wallet to sign';
+            $enrollSub.textContent   = 'Opens Phantom wallet to sign';
         }
 
-        // Parse tiers from label if multiple actions exist
+        // Parse tiers
         const actions = data.links?.actions || [];
         if (actions.length > 1 && tiers.length === 0) {
             tiers = actions.map((a, i) => {
-                const m = a.label.match(/([\d.]+)\s+USDC/i);
+                const m  = a.label.match(/([\d.]+)\s+USDC/i);
                 const nm = a.label.match(/^([^\d—]+)/);
                 return {
-                    label: nm ? nm[1].trim().replace(/—.*/, '').trim() : `Tier ${i+1}`,
+                    label:  nm ? nm[1].trim().replace(/—.*/, '').trim() : `Tier ${i+1}`,
                     amount: m ? m[1] : '?',
-                    href: a.href,
+                    href:   a.href,
                 };
             });
             renderTiers();
         } else if (tiers.length === 0 && priceMatch) {
-            // Single tier — show one pill
             tiers = [{ label: 'Early Bird', amount: priceMatch[1], href: actionHref }];
             renderTiers();
         }
+    }
 
     function renderTiers() {
         $tierButtons.innerHTML = '';
