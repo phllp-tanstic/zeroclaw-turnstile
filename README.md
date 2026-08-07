@@ -27,23 +27,51 @@ The agent never holds a private key and never signs a transaction. This is struc
 curl -fsSL https://raw.githubusercontent.com/zeroclaw-labs/zeroclaw/master/install.sh | sh
 
 # 2. Clone Turnstile
-git clone https://github.com/YOUR_USERNAME/zeroclaw-turnstile
+git clone https://github.com/phllp-tanstic/zeroclaw-turnstile
 cd zeroclaw-turnstile
 
 # 3. Build the Actions responder
 cd responder && cargo build --release && cd ..
 
-# 4. Run the responder
-export TURNSTILE_RECIPIENT="YOUR_WALLET_PUBKEY"
-export TURNSTILE_DEVNET="1"
+# 4. Configure the responder
+export TURNSTILE_RECIPIENT="YOUR_WALLET_PUBKEY"            # public key — receives payments
+export TURNSTILE_ADMIN_TOKEN="$(openssl rand -base64 32)"  # required: /admin/* is 401 without it
+export TURNSTILE_RPC="https://api.devnet.solana.com"       # optional, this is the default
+export TURNSTILE_DEVNET="1"                                # 1 = devnet USDC mint, 0 = mainnet
+export TURNSTILE_STATE="./turnstile-state.json"            # optional
+export PORT="8080"                                         # optional
+
+# 5. Run the responder
 cd responder && cargo run --release &
 
-# 5. Expose it
+# 6. Expose it
 ngrok http 8080
 
-# 6. Start the agent
+# 7. Start the agent
 zeroclaw daemon
 ```
+
+Store `TURNSTILE_ADMIN_TOKEN` where the agent can read it — this repo uses a ZeroClaw knowledge
+bundle pointed at a gitignored `config/turnstile-secrets.md`. Never inline it into a skill file;
+skills reference it as `{admin_token}`.
+
+### Responder environment variables
+
+| Variable | Required | Default | Purpose |
+|---|---|---|---|
+| `TURNSTILE_RECIPIENT` | yes | — | Organizer's wallet **public** key; receives payments |
+| `TURNSTILE_ADMIN_TOKEN` | yes | _(unset)_ | Bearer token for `/admin/*`. Auth **fails closed** when unset |
+| `TURNSTILE_RPC` | no | `https://api.devnet.solana.com` | Solana RPC. `TURNSTILE_RPC_URL` also accepted |
+| `TURNSTILE_DEVNET` | no | `1` | `1`/`true` = devnet USDC mint; `0` = mainnet mint |
+| `TURNSTILE_STATE` | no | `/data/turnstile-state.json` | Event + roster state file |
+| `PORT` | no | `8080` | Public listener port |
+| `TURNSTILE_ADMIN_BIND` | no | `shared` | `shared` = admin on the public listener (bearer-only); `local` = admin on its own `127.0.0.1` listener |
+| `TURNSTILE_ADMIN_PORT` | no | `PORT + 1` | Admin port when `TURNSTILE_ADMIN_BIND=local` |
+
+`TURNSTILE_ADMIN_BIND` defaults to `shared` because hosted deployments (Railway, Fly, Render)
+expose a single port and the agent calls `/admin/*` remotely. In that mode the bearer token is
+the only access control — see [docs/threat-model.md](docs/threat-model.md) §7. Use `local` when
+the responder runs on the same host as the agent.
 
 Full instructions: [docs/installation.md](docs/installation.md)
 
@@ -51,28 +79,31 @@ Full instructions: [docs/installation.md](docs/installation.md)
 
 In Discord or Telegram:
 
+```
 @Turnstile my responder is https://your-ngrok-url.ngrok-free.dev
 
 @Turnstile create event "Solana Builders Workshop" capacity 50, price 25 USDC early bird
-
+```
 
 Turnstile announces the Blink. Attendees tap, pay, get confirmed automatically.
 
 ## Architecture
 
-Organizer (Discord/Telegram)
-│
-▼
-ZeroClaw Agent (daemon) Turnstile Actions Responder
-├── Skills (deterministic Rust HTTP)
-├── Cron (payment poll) ◄──► turnstile-state.json
-└── Memory (SQLite) │
-│ │ GET /actions/enroll
-│ getSignaturesForAddress │ POST /actions/enroll
-▼ ▼
-Solana RPC Attendee Wallet
-(signs & broadcasts)
-
+```
+              Organizer (Discord/Telegram)
+                          │
+                          ▼
+        ZeroClaw Agent (daemon)                Turnstile Actions Responder
+        ├── Skills (markdown)                  ├── GET  /actions/enroll  (live preview)
+        ├── Cron SOP (payment poll)  ◄──────►  ├── POST /actions/enroll  (unsigned tx)
+        └── Memory (SQLite)                    ├── POST /admin/*         (bearer auth)
+                          │                    └── turnstile-state.json
+                          │                                  │
+                          │ getSignaturesForAddress          │
+                          ▼                                  ▼
+                     Solana RPC                       Attendee Wallet
+                                                     (signs & broadcasts)
+```
 
 Full architecture: [docs/architecture.md](docs/architecture.md)
 
@@ -86,29 +117,32 @@ See [docs/prompt-injection-transcripts.md](docs/prompt-injection-transcripts.md)
 
 ## Repository structure
 
+```
 zeroclaw-turnstile/
 ├── README.md
 ├── docs/
-│ ├── architecture.md
-│ ├── threat-model.md
-│ ├── installation.md
-│ ├── workflow.md
-│ ├── operator-guide.md
-│ ├── limitations.md
-│ └── prompt-injection-transcripts.md
+│   ├── architecture.md
+│   ├── threat-model.md
+│   ├── installation.md
+│   ├── workflow.md
+│   ├── operator-guide.md
+│   ├── limitations.md
+│   └── prompt-injection-transcripts.md
 ├── skills/
-│ ├── enroll-event/skill.md
-│ └── payment-confirm/skill.md
+│   ├── enroll-event/skill.md
+│   └── payment-confirm/skill.md
 ├── sops/
-│ ├── payment-confirmation-poll.toml
-│ └── refund-approval.toml
+│   ├── payment-confirmation-poll.toml
+│   └── refund-approval.toml
 ├── config/
-│ └── turnstile.example.toml
-├── responder/ ← Rust Actions HTTP service
-│ └── src/main.rs
+│   └── turnstile.example.toml
+├── responder/                 ← Rust Actions HTTP service
+│   └── src/main.rs
+├── web/                       ← enrollment page (static)
+│   └── index.html
 └── scripts/
-└── verify-setup.ps1
-
+    └── verify-setup.ps1
+```
 
 ## License
 
