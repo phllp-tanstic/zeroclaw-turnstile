@@ -11,7 +11,7 @@ Called only by cron — never from chat.
    - memory_write("turnstile:confirmed:{ref}", {signature, timestamp})
    - Remove from pending_refs
    - POST https://turnstile-actions-production.up.railway.app/admin/confirm
-     Authorization: Bearer G0chb2QkAFtVPdfQPKYDyC325z79H0qLuy5JKz7W0Ys=
+     Authorization: Bearer {admin_token}   ← read from knowledge bundle (turnstile-secrets.md), never inline
      Body: {"event_id": "{active_event_id}", "ref": "{ref}", "signature": "{signature}"}
    - Post in channel: "✅ Payment confirmed · ref {ref[:8]}... · sig {sig[:8]}..."
 5. If RPC error: memory_write("turnstile:rpc_errors", {timestamp, error}) — do not mark confirmed.
