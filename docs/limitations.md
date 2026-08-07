@@ -11,12 +11,14 @@ Turnstile ships configured for Solana devnet. Switching to mainnet requires
 updating `TURNSTILE_DEVNET=0` and using a mainnet RPC endpoint. Mainnet
 USDC requires the attendee to have a funded USDC token account.
 
-### ATA derivation approximation
-The Actions responder derives Associated Token Accounts using a SHA256
-approximation rather than the full ed25519 curve check. Wallets validate
-and correct the ATA at sign time — this does not affect correctness for
-end users but means the responder's ATA computation should not be relied
-upon independently.
+### Confirmation is not idempotent
+`POST /admin/confirm` increments the confirmed count by one on every accepted
+call. The polling skill removes a reference key from `turnstile:pending_refs`
+once confirmed, so retries are not expected — but if the POST succeeds and the
+subsequent memory write fails, the next cron tick would count the same payment
+twice and overstate the roster. Deduplicating on reference key server-side is
+the fix; until then, operators should sanity-check the confirmed count against
+on-chain transfers before closing enrollment.
 
 ### Single event at a time
 The current state file supports one active event. Multiple concurrent
