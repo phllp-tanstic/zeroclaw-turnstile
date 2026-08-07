@@ -7,6 +7,7 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://code.iconify.design/iconify-icon/1.0.7/iconify-icon.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+    <script src="https://unpkg.com/@solana/web3.js@1.95.3/lib/index.iife.min.js"></script>
 </head>
 <body class="bg-[#050505] text-neutral-200 font-sans overflow-hidden h-screen w-screen relative antialiased selection:bg-amber-500/30 selection:text-amber-200">
 
@@ -94,10 +95,10 @@
     </div>
 
     <!-- Error state (hidden by default) -->
-    <div id="error-state" class="hidden fixed inset-0 z-20 flex items-center justify-center">
+    <div id="error-state" class="hidden fixed inset-0 z-20 flex items-center justify-center bg-[#050505]/95 backdrop-blur-sm">
         <div class="font-mono text-center">
-            <p class="text-amber-500 text-xs tracking-widest uppercase mb-2">No active event</p>
-            <p class="text-neutral-600 text-[10px] tracking-widest">Check back soon or contact the organizer.</p>
+            <p class="text-amber-500 text-xs tracking-widest uppercase mb-2" id="error-title">No active event</p>
+            <p class="text-neutral-600 text-[10px] tracking-widest" id="error-detail">Check back soon or contact the organizer.</p>
         </div>
     </div>
 
@@ -114,10 +115,10 @@
     const EVENT_ID  = params.get('event_id') || 'evt_001';
 
     // ─── State ────────────────────────────────────────────────────────────────
-    let activeTierIndex = 0;
-    let tiers = [];
-    let eventData = null;
+    let eventData    = null;
     let pollInterval = null;
+    let actionUrl    = null;   // resolved POST target for the active event
+    let enrolled     = false;  // set once a signature comes back
 
     // ─── DOM refs ─────────────────────────────────────────────────────────────
     const $spotsCount   = document.getElementById('spots-count');
@@ -131,37 +132,82 @@
     const $enrollSub    = document.getElementById('enroll-sub');
     const $tierButtons  = document.getElementById('tier-buttons');
     const $errorState   = document.getElementById('error-state');
+    const $errorTitle   = document.getElementById('error-title');
+    const $errorDetail  = document.getElementById('error-detail');
+
+    // ─── Wallet detection ─────────────────────────────────────────────────────
+    // Phantom injects window.phantom.solana asynchronously. In the mobile in-app
+    // browser it is frequently NOT present at DOMContentLoaded, which is why a
+    // one-shot check at startup reports "no wallet" on a device that has one.
+    function getPhantom() {
+        const p = window?.phantom?.solana || window?.solana;
+        return p && p.isPhantom ? p : null;
+    }
+
+    function waitForPhantom(timeoutMs = 3000) {
+        return new Promise((resolve) => {
+            const found = getPhantom();
+            if (found) return resolve(found);
+            const started = Date.now();
+            const tick = setInterval(() => {
+                const p = getPhantom();
+                if (p || Date.now() - started > timeoutMs) {
+                    clearInterval(tick);
+                    resolve(p || null);
+                }
+            }, 100);
+        });
+    }
 
     // ─── Fetch live event data ─────────────────────────────────────────────────
     async function fetchEvent() {
         if (!RESPONDER) {
-            showError();
+            showError('Not configured', 'No responder URL in the link. Ask the organizer for a fresh link.');
             return;
         }
+
+        let data;
         try {
             const res = await fetch(
-                `${RESPONDER}/actions/enroll?event_id=${EVENT_ID}`,
+                `${RESPONDER}/actions/enroll?event_id=${encodeURIComponent(EVENT_ID)}`,
                 { headers: { 'ngrok-skip-browser-warning': '1' } }
             );
-            if (!res.ok) { showError(); return; }
-            const data = await res.json();
+            if (!res.ok) {
+                showError('No active event', `Responder returned ${res.status}.`);
+                return;
+            }
+            data = await res.json();
+        } catch (e) {
+            // Network / CORS / JSON parse failure. This is the ONLY condition that
+            // legitimately means "the event could not be loaded".
+            console.error('[turnstile] fetch failed:', e);
+            showError('Connection failed', 'Could not reach the responder. Retrying...');
+            return;
+        }
+
+        // Rendering happens OUTSIDE the try above on purpose. Previously a render
+        // exception was caught by the fetch catch and surfaced as "no active
+        // event" on top of data that had already painted successfully.
+        hideError();
+        eventData = data;
+        try {
             applyEventData(data);
         } catch (e) {
-            showError();
+            console.error('[turnstile] render error (event data was fine):', e);
         }
     }
 
     function applyEventData(data) {
-        // Parse spots from description field
-        const spotsMatch = data.description.match(/(\d+)\s+spot/i);
-        const spots = spotsMatch ? parseInt(spotsMatch[1]) : null;
-        const soldOut = data.label && data.label.toLowerCase().includes('waitlist');
+        const description = data.description || '';
+        const label       = data.label || '';
 
-        // Title & description
+        const spotsMatch = description.match(/(\d+)\s+spot/i);
+        const spots      = spotsMatch ? parseInt(spotsMatch[1], 10) : null;
+        const soldOut    = label.toLowerCase().includes('waitlist');
+
         $eventLabel.textContent = data.title || 'Event Enrollment';
-        $eventDesc.textContent  = (data.description || '').split('\n')[0];
+        $eventDesc.textContent  = description.split('\n')[0];
 
-        // Spots display
         if (soldOut) {
             $spotsCount.textContent = '0';
             $spotsLabel.textContent = 'spots';
@@ -172,138 +218,96 @@
             $badgeSpots.textContent = spots;
         }
 
-        // Price from label e.g. "Enroll — 25 USDC (50 spots left)"
-        const priceMatch = data.label && data.label.match(/([\d.]+)\s+USDC/i);
-        if (priceMatch) {
-            $priceDisplay.textContent = `${priceMatch[1]} USDC`;
-        }
+        const priceMatch = label.match(/([\d.]+)\s+USDC/i);
+        if (priceMatch) $priceDisplay.textContent = `${priceMatch[1]} USDC`;
 
-        // Enroll button
+        // Only record the action URL here. The click handler is bound exactly once
+        // at startup — binding it here meant the 30s poll stacked a new listener
+        // every tick, so one tap fired N transactions.
         const actionHref = data.links?.actions?.[0]?.href;
         if (actionHref) {
-            const fullAction = actionHref.startsWith('http')
-                ? actionHref
-                : `${RESPONDER}${actionHref}`;
+            actionUrl = actionHref.startsWith('http') ? actionHref : `${RESPONDER}${actionHref}`;
+            $enrollBtn.setAttribute('href', actionUrl);
+        }
+    }
 
-            $enrollBtn.addEventListener('click', async (e) => {
-                e.preventDefault();
+    // ─── Enroll ───────────────────────────────────────────────────────────────
+    async function handleEnroll(e) {
+        e.preventDefault();
+        if (enrolled) return;
+        if (!actionUrl) { $enrollSub.textContent = 'Event still loading...'; return; }
 
-                // Check if Phantom extension is injected
-                const phantom = window?.phantom?.solana || window?.solana;
+        const phantom = getPhantom() || await waitForPhantom(1500);
 
-                if (phantom?.isPhantom) {
-                    // Desktop with Phantom extension — fetch and sign directly
-                    try {
-                        const conn = await phantom.connect();
-                        const pubkey = conn.publicKey.toString();
+        if (!phantom) {
+            // No injected provider — hand off to the Phantom in-app browser.
+            // Use location.href, not window.open: mobile Safari/Chrome block
+            // programmatic window.open outside a trusted gesture chain.
+            window.location.href =
+                `https://phantom.app/ul/browse/${encodeURIComponent(window.location.href)}`;
+            return;
+        }
 
-                        const res = await fetch(`${fullAction}`, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ account: pubkey })
-                        });
-                        const { transaction } = await res.json();
+        const originalSub = $enrollSub.textContent;
+        try {
+            $enrollSub.textContent = 'Connecting wallet...';
+            const conn   = await phantom.connect();
+            const pubkey = conn.publicKey.toString();
 
-                        // Decode base64 transaction
-                        const txBytes = Uint8Array.from(atob(transaction), c => c.charCodeAt(0));
-
-                        // Sign and send
-                        const { signature } = await phantom.signAndSendTransaction(
-                            { serialize: () => txBytes }
-                        );
-
-                        $enrollLabel.textContent = '✓ Enrolled!';
-                        $enrollSub.textContent   = `Sig: ${signature.slice(0,8)}...`;
-                    } catch (err) {
-                        $enrollSub.textContent = `Error: ${err.message}`;
-                    }
-                } else {
-                    // No extension — open in Phantom mobile in-app browser
-                    const pageUrl = encodeURIComponent(window.location.href);
-                    window.open(`https://phantom.app/ul/browse/${pageUrl}`, '_blank');
-                }
+            $enrollSub.textContent = 'Building transaction...';
+            const res     = await fetch(actionUrl, {
+                method:  'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body:    JSON.stringify({ account: pubkey })
             });
-        }
+            const payload = await res.json();
+            if (!res.ok || !payload.transaction) {
+                throw new Error(payload.error || `Responder returned ${res.status}`);
+            }
 
-        if (soldOut) {
-            $enrollLabel.textContent = 'Join waitlist';
-            $enrollSub.textContent   = 'Sold out — join the waitlist';
-        } else {
-            $enrollLabel.textContent = 'Enroll now';
-            $enrollSub.textContent   = 'Opens Phantom wallet to sign';
-        }
+            const txBytes = Uint8Array.from(atob(payload.transaction), c => c.charCodeAt(0));
 
-        // Parse tiers
-        const actions = data.links?.actions || [];
-        if (actions.length > 1 && tiers.length === 0) {
-            tiers = actions.map((a, i) => {
-                const m  = a.label.match(/([\d.]+)\s+USDC/i);
-                const nm = a.label.match(/^([^\d—]+)/);
-                return {
-                    label:  nm ? nm[1].trim().replace(/—.*/, '').trim() : `Tier ${i+1}`,
-                    amount: m ? m[1] : '?',
-                    href:   a.href,
-                };
-            });
-            renderTiers();
-        } else if (tiers.length === 0 && priceMatch) {
-            tiers = [{ label: 'Early Bird', amount: priceMatch[1], href: actionHref }];
-            renderTiers();
+            // Deserialise properly. The previous duck-typed { serialize: () => bytes }
+            // is not a Transaction and Phantom rejects it on current builds.
+            const tx = (window.solanaWeb3 && window.solanaWeb3.Transaction)
+                ? window.solanaWeb3.Transaction.from(txBytes)
+                : { serialize: () => txBytes };
+
+            $enrollSub.textContent = 'Approve in Phantom...';
+            const result = await phantom.signAndSendTransaction(tx);
+            const sig    = typeof result === 'string'
+                ? result
+                : (result?.signature || result?.txid || '');
+
+            enrolled = true;
+            $enrollLabel.textContent     = '✓ Enrolled';
+            $enrollBtn.style.borderColor = '#22c55e';
+            $enrollSub.textContent       = sig
+                ? `Sent · ${sig.slice(0, 8)}… · confirming on-chain`
+                : 'Sent · confirming on-chain';
+            // Polling deliberately continues — the spots counter updates live once
+            // the agent confirms the payment on-chain.
+        } catch (err) {
+            const raw = err?.message || String(err);
+            const low = raw.toLowerCase();
+            $enrollSub.textContent =
+                (low.includes('reject') || low.includes('cancel') || low.includes('denied'))
+                    ? 'Transaction cancelled.'
+                    : `Error: ${raw.slice(0, 80)}`;
+            if (low.includes('reject') || low.includes('cancel') || low.includes('denied')) {
+                setTimeout(() => { if (!enrolled) $enrollSub.textContent = originalSub; }, 4000);
+            }
         }
     }
 
-    function renderTiers() {
-        $tierButtons.innerHTML = '';
-        tiers.forEach((tier, i) => {
-            const active = i === activeTierIndex;
-            const btn = document.createElement('button');
-            btn.className = `js-tier-btn js-magnetic relative px-5 py-3 md:px-6 md:py-4 rounded-full border border-neutral-800 bg-neutral-950/50 backdrop-blur-sm font-mono text-[10px] md:text-xs tracking-widest uppercase transition-all duration-500 ease-out hover:border-neutral-600 focus:outline-none`;
-            btn.dataset.index = i;
-            btn.innerHTML = `
-                <div class="absolute inset-0 rounded-full bg-gradient-to-r from-amber-500/20 to-transparent transition-opacity duration-500 js-active-bg" style="opacity:${active ? 1 : 0}"></div>
-                <div class="absolute inset-0 rounded-full border border-amber-500/50 transition-opacity duration-500 js-active-border" style="opacity:${active ? 1 : 0}"></div>
-                <span class="relative z-10 flex flex-col items-start ${active ? 'text-neutral-200' : 'text-neutral-500'} js-active-text transition-colors duration-500">
-                    ${tier.label}
-                    <span class="text-[8px] md:text-[9px] tracking-widest mt-1 js-active-sub transition-colors duration-500 ${active ? 'text-amber-500/80' : 'text-neutral-600'}">${tier.amount} USDC</span>
-                </span>`;
-            btn.addEventListener('click', () => selectTier(i));
-            $tierButtons.appendChild(btn);
-            applyMagnetic(btn);
-        });
-    }
-
-    function selectTier(index) {
-        activeTierIndex = index;
-        const tier = tiers[index];
-
-        // Update price
-        gsap.to('#price-display', { opacity: 0, y: -8, duration: 0.2, ease: 'power2.in', onComplete: () => {
-            $priceDisplay.textContent = `${tier.amount} USDC`;
-            gsap.to('#price-display', { opacity: 1, y: 0, duration: 0.3, ease: 'power2.out' });
-        }});
-
-        // Update enroll href
-        if (tier.href) {
-            const fullAction = tier.href.startsWith('http') ? tier.href : `${RESPONDER}${tier.href}`;
-            $enrollBtn.href = `solana-action:${fullAction}`;
-        }
-
-        // Update pill states
-        $tierButtons.querySelectorAll('.js-tier-btn').forEach((btn, i) => {
-            const isActive = i === index;
-            btn.querySelector('.js-active-bg').style.opacity    = isActive ? '1' : '0';
-            btn.querySelector('.js-active-border').style.opacity = isActive ? '1' : '0';
-            const txt = btn.querySelector('.js-active-text');
-            const sub = btn.querySelector('.js-active-sub');
-            txt.classList.toggle('text-neutral-200', isActive);
-            txt.classList.toggle('text-neutral-500', !isActive);
-            sub.classList.toggle('text-amber-500/80', isActive);
-            sub.classList.toggle('text-neutral-600', !isActive);
-        });
-    }
-
-    function showError() {
+    function showError(title, detail) {
+        if (title)  $errorTitle.textContent  = title;
+        if (detail) $errorDetail.textContent = detail;
         $errorState.classList.remove('hidden');
+    }
+
+    function hideError() {
+        $errorState.classList.add('hidden');
     }
 
     // ─── Magnetic effect ──────────────────────────────────────────────────────
@@ -398,6 +402,10 @@
 
     // ─── Entry animations (identical timing to design source) ─────────────────
     document.addEventListener('DOMContentLoaded', async () => {
+        // Bind the enroll handler exactly once, before any fetch, so a slow
+        // responder cannot leave the button dead and a poll cannot duplicate it.
+        $enrollBtn.addEventListener('click', handleEnroll);
+
         // Fetch event data first
         await fetchEvent();
 
@@ -412,6 +420,16 @@
 
         // Magnetic on static elements
         document.querySelectorAll('.js-magnetic').forEach(applyMagnetic);
+
+        // Resolve the wallet label only after giving Phantom time to inject.
+        // A synchronous check here is why the in-app browser showed the generic
+        // "Tap to open in your Solana wallet" on a device that had Phantom.
+        waitForPhantom(3000).then((p) => {
+            if (enrolled) return;
+            $enrollSub.textContent = p
+                ? 'Opens Phantom wallet to sign'
+                : 'Tap to open in your Solana wallet';
+        });
 
         // Poll for live spot count every 30s
         pollInterval = setInterval(fetchEvent, 30000);
