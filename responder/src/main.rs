@@ -587,7 +587,7 @@ async fn fetch_latest_blockhash(rpc_url: &str) -> Result<Hash, String> {
 const USDC_MINT_DEVNET:  &str = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
 const USDC_MINT_MAINNET: &str = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const SPL_TOKEN_PROGRAM: &str = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
-const ATA_PROGRAM:       &str = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJe8bv";
+const ATA_PROGRAM:       &str = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL";
 const MEMO_PROGRAM:      &str = "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr";
 const SYSTEM_PROGRAM:    &str = "11111111111111111111111111111111";
 
